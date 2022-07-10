@@ -1,0 +1,22 @@
+{
+  "name": "discord.ya",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@discordjs/voice": "^0.10.0",
+    "discord.js": "^13.8.1",
+    "ffmpeg-static": "^5.0.2",
+    "fs": "^0.0.1-security",
+    "http": "^0.0.1-security",
+    "https": "^1.0.0",
+    "libsodium-wrappers": "^0.7.10",
+    "ym-api": "^1.2.1"
+  }
+}
