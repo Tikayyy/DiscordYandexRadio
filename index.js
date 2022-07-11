@@ -17,15 +17,16 @@ const https = require("https");
 const prefix = '@';
 const downloadedTracksDir = "C:\\Users\\Tikay\\Desktop\\discord.ya\\tmp-music\\audio.mp3";
 const audioPlayer = createAudioPlayer();
-var music = [];
-var sounded = '';
-var messageVar = null;
+let resource = null;
+let music = [];
+let sounded = 0;
+let messageVar = null;
 
 const client = new Discord.Client({
     intents: ["GUILDS", "GUILD_MESSAGES", "GUILD_VOICE_STATES"]
 });
 
-client.on("messageCreate", function(message) {
+client.on("messageCreate", async function (message) {
     if (message.author.bot || !message.content.startsWith(prefix)) {
         return;
     }
@@ -35,64 +36,81 @@ client.on("messageCreate", function(message) {
     const command = args.shift().toLowerCase();
 
     if (message.author.tag === "ELan#5744") {
-        message.reply("Все еще не поздно сгонять за хлебом");
+        await message.reply("Все еще не поздно сгонять за хлебом");
     }
 
-    if (messageVar === null) {
-        messageVar = message;
-    }
+    messageVar = messageVar === null ? message : messageVar;
 
     switch (command) {
         case "play":
-            yandexPlay(args);
+            await yandexPlay(args);
             break
         case "stop":
-            yandexStop()
+            yandexStop();
             break;
         case "skip":
             yandexSkip();
             break;
+        case "queue":
+            yandexQueue();
+            break;
         default:
-            messageVar.reply('Такой команды нет, еблан');
+            await messageVar.reply('Такой команды нет, еблан');
             break;
     }
 });
 
 client.login(config.BOT_TOKEN);
 
-function yandexPlay(args) {
-    var link = args[0];
-    var segments =  link.split('/');
-    var id = segments[segments.length - 1];
-    var type = segments[segments.length - 2];
+async function yandexPlay(args) {
+    let link = args[0];
+    let segments =  link.split('/');
+    let id = segments[segments.length - 1];
+    let type = segments[segments.length - 2];
 
-    if (type === 'track') {
-        playTrack(id);
-    } else if (type === 'album') {
-        (async () => {
-            try {
-                var album = await api.getAlbum(id, true);
-                album.volumes[0].forEach(function (track) {
-                    playTrack(track.id);
-                });
-            } catch (e) {
-                console.log(`api error ${e.message}`);
-            }
-        })();
-    } else if (type === 'playlists') {
-        (async () => {
-            try {
-                var user = segments[segments.length - 3];
-                var playlist = await api.getPlaylist(id, user);
-                playlist.tracks.forEach(function (track) {
-                    playTrack(track.id);
-                });
-            } catch (e) {
-                console.log(`api error ${e.message}`);
-            }
-        })();
-    } else {
-        messageVar.reply("Кинь нормальную ссылку, кожанный пидрилла");
+    try {
+        if (!link.includes('https://music.yandex.ru/')) {
+            let query = '';
+            args.forEach(function (word) {
+                query += word + ' ';
+            });
+            query = encodeURIComponent(query);
+            let search = await api.searchTracks(query);
+            let track = search.tracks.results[0];
+
+            playTrack(track.id)
+
+            return;
+        }
+
+        if (type === 'track') {
+            playTrack(id);
+        } else if (type === 'album') {
+            let album = await api.getAlbum(id, true);
+            album.volumes[0].sort(function (a, b) {
+                if (a.id > b.id) {
+                    return -1;
+                } else if (a.id < b.id) {
+                    return 1;
+                } else {
+                    return 0;
+                }
+            }).forEach(function (track) {
+                playTrack(track.id);
+            });
+        } else if (type === 'playlists') {
+            let user = segments[segments.length - 3];
+            let playlist = await api.getPlaylist(id, user);
+            playlist.tracks.forEach(function (track) {
+                playTrack(track.id);
+            });
+        } else {
+            messageVar.reply("Кинь нормальную ссылку, кожанный пидрилла");
+        }
+
+    } catch (e) {
+        console.log(`api error ${e.message}`);
+        messageVar.channel.send('Error');
     }
 }
 
@@ -102,57 +120,94 @@ function yandexStop() {
 }
 
 function yandexSkip() {
-    if (music.length > 0) {
-        const resource = createAudioResource(music.shift());
-        audioPlayer.play(resource);
+    audioPlayer.stop(true);
+}
+
+async function playTrack(id) {
+    const connection = connect(messageVar);
+
+    try {
+        await api.init({ username: config.YANDEX_EMAIL, password: config.YANDEX_PASSWORD });
+
+        const downloadInfo = await api.getTrackDownloadInfo(id);
+        const trackLink = await api.getTrackDirectLink(downloadInfo[0].downloadInfoUrl);
+
+        let track = downloadedTracksDir.replace('audio', id);
+        fs.exists(track, function(isExist) {
+            if (!isExist) {
+                let file = fs.createWriteStream(track);
+                let request = https.get(trackLink, function(response) {
+                    response.pipe(file);
+                });
+            }
+        });
+
+        const trackInfo = await api.getTrack(id);
+
+        music.push({
+            'path': track,
+            'title': trackInfo[0].artists[0].name + " - " + trackInfo[0].title
+        });
+
+        if (audioPlayer.state.status !== 'playing' && audioPlayer.state.status !== 'buffering') {
+            let currentTrack = music.shift();
+            sounded = currentTrack['path'];
+
+            messageVar.channel.send(currentTrack['title']);
+
+            resource = createAudioResource(sounded);
+            audioPlayer.play(resource);
+            const subscription = connection.subscribe(audioPlayer);
+
+            audioPlayer.on('idle', async function () {
+                await yandexNext();
+            });
+        }
+    } catch (e) {
+        console.log(`api error ${e.message}`);
     }
 }
 
-function playTrack(id) {
-    const connection = connect(messageVar);
+async function yandexNext() {
+    if (music.length  === 0) {
+        await deleteTrack();
+        return;
+    }
 
-    (async () => {
-        try {
-            await api.init({ username: config.YANDEX_EMAIL, password: config.YANDEX_PASSWORD });
+    let currentTrack = music.shift();
+    resource = createAudioResource(currentTrack['path']);
 
-            const downloadInfo = await api.getTrackDownloadInfo(id);
-            const trackLink = await api.getTrackDirectLink(downloadInfo[0].downloadInfoUrl);
+    audioPlayer.play(resource);
 
-            var track = downloadedTracksDir.replace('audio', id);
-            fs.exists(track, function(isExist) {
-                if (!isExist) {
-                    var file = fs.createWriteStream(track);
-                    var request = https.get(trackLink, function(response) {
-                        response.pipe(file);
-                    });
-                }
-            });
+    messageVar.channel.send(currentTrack['title']);
 
-            const trackInfo = await api.getTrack(id);
-            messageVar.channel.send(trackInfo[0].artists[0].name + " - " + trackInfo[0].title);
+    if (sounded !== 0) {
+        await deleteTrack(currentTrack['path']);
+    }
+}
 
-            music.push(track);
-            sounded = track;
-            if (audioPlayer.state.status !== 'playing' && audioPlayer.state.status !== 'buffering') {
-                const resource = createAudioResource(music.shift());
-                audioPlayer.play(resource);
-                const subscription = connection.subscribe(audioPlayer);
+function yandexQueue() {
+    music.forEach(function (track) {
+        messageVar.channel.send(track.title);
+    });
+}
 
-                audioPlayer.on('idle', function () {
-                    if (music.length > 0) {
-                        const resource = createAudioResource(music.shift());
-                        audioPlayer.play(resource);
-                    }
-                });
+async function deleteTrack(next = false) {
+    setTimeout(function() {
+        fs.unlink(sounded, function (error) {
+            if (error) {
+                console.log(error.message);
+            } else {
+                console.log('File removed: ' + sounded);
             }
-        } catch (e) {
-            console.log(`api error ${e.message}`);
-        }
-    })();
+        });
+
+        sounded = next !== false ? next : 0;
+    }, 5000);
 }
 
 function connect() {
-    var channel = messageVar.member.voice.channel;
+    let channel = messageVar.member.voice.channel;
     return DiscordVoice.joinVoiceChannel({
         channelId: channel.id,
         guildId: channel.guild.id,

@@ -1,3 +1,4 @@
 node_modules/
 tmp-music/*
 .idea/
+config.json
